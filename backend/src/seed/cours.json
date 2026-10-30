@@ -1,0 +1,50 @@
+[
+  {
+    "title": "Introduction au DevOps",
+    "summary": "Culture DevOps, boucle Dev/Ops et organisation du module.",
+    "session": 1,
+    "duration": 60,
+    "level": "debutant",
+    "topics": ["Culture DevOps", "Agilité"]
+  },
+  {
+    "title": "Git et travail collaboratif",
+    "summary": "Branches, pull requests et revue de code en binôme.",
+    "session": 2,
+    "duration": 90,
+    "level": "debutant",
+    "topics": ["Git", "GitHub", "Branches"]
+  },
+  {
+    "title": "Conteneurs avec Docker",
+    "summary": "Images, conteneurs et Dockerfile multi-stage.",
+    "session": 3,
+    "duration": 150,
+    "level": "intermediaire",
+    "topics": ["Docker", "Images", "Dockerfile"]
+  },
+  {
+    "title": "Orchestration avec Docker Compose",
+    "summary": "Stack multi-conteneurs, réseaux, volumes et healthchecks.",
+    "session": 4,
+    "duration": 165,
+    "level": "intermediaire",
+    "topics": ["Compose", "Réseaux", "Volumes"]
+  },
+  {
+    "title": "Tests automatisés",
+    "summary": "Pyramide des tests, couverture, tests E2E et qualité du code.",
+    "session": 5,
+    "duration": 210,
+    "level": "intermediaire",
+    "topics": ["Vitest", "Playwright", "SonarQube"]
+  },
+  {
+    "title": "Intégration et déploiement continus",
+    "summary": "Pipeline CI/CD : construire, tester et livrer à chaque commit.",
+    "session": 6,
+    "duration": 45,
+    "level": "avance",
+    "topics": ["GitHub Actions", "Pipeline", "Déploiement"]
+  }
+]

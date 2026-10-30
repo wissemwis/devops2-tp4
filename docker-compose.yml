@@ -1,0 +1,229 @@
+name: tp4
+
+services:
+  # ---------------- Base de données ----------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Pas de "ports" : la base n'est joignable que depuis les autres conteneurs
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # ---------------- Administration de la base ----------------
+  pgadmin:
+    image: dpage/pgadmin4:9
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      # Écoute en IPv4 (évite un crash sur les machines où IPv6 est désactivé)
+      PGADMIN_LISTEN_ADDRESS: 0.0.0.0
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # ---------------- CMS headless (API) ----------------
+  strapi:
+    build: ./backend
+    image: tp4/strapi:dev
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 1337
+      DATABASE_CLIENT: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB}
+      DATABASE_USERNAME: ${POSTGRES_USER}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      APP_KEYS: ${APP_KEYS}
+      API_TOKEN_SALT: ${API_TOKEN_SALT}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
+      JWT_SECRET: ${JWT_SECRET}
+      TRANSFER_TOKEN_SALT: ${TRANSFER_TOKEN_SALT}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    volumes:
+      - strapi-uploads:/opt/app/public/uploads
+    ports:
+      - "${STRAPI_PORT:-1337}:1337"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:1337/_health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # ---------------- Front-end ----------------
+  frontend:
+    build:
+      context: ./frontend
+      # Pendant le build, "nexus" désigne la machine hôte, où Nexus publie le port 8081
+      extra_hosts:
+        - "nexus:host-gateway"
+    image: tp4/frontend:dev
+    restart: unless-stopped
+    environment:
+      # Appel serveur à serveur : on utilise le nom du service, pas "localhost"
+      STRAPI_URL: http://strapi:1337
+      STRAPI_CLIENT_PASSWORD: ${STRAPI_CLIENT_PASSWORD}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      strapi:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ---------------- Gestionnaire de dépôts d'artefacts ----------------
+  nexus:
+    image: sonatype/nexus3:${NEXUS_VERSION:-3.96.5}
+    restart: unless-stopped
+    environment:
+      INSTALL4J_ADD_VM_PARAMS: ${NEXUS_JVM_PARAMS:--Xms1g -Xmx1g -XX:MaxDirectMemorySize=512m -Djava.util.prefs.userRoot=/nexus-data/javaprefs}
+    mem_limit: ${NEXUS_MEM_LIMIT:-2g}
+    ports:
+      # 8081 sur toutes les interfaces : les builds Docker l'atteignent via host-gateway
+      - "8081:8081"
+      # Ports Docker réservés au client Docker de la machine (HTTP accepté pour localhost)
+      - "127.0.0.1:8082:8082"   # docker-hosted : push
+      - "127.0.0.1:8083:8083"   # docker-group : pull
+    volumes:
+      - nexus-data:/nexus-data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8081/service/rest/v1/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # ---------------- Client npm (profil "tools") ----------------
+  # Usage : docker compose run --rm npm <dossier> <arguments npm>
+  #   ex.  docker compose run --rm npm frontend ci
+  npm:
+    image: node:22
+    profiles: ["tools"]
+    # Linux : HOST_UID / HOST_GID dans .env (sortie de "id -u" / "id -g") si vous n'êtes pas l'utilisateur 1000
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /work
+    entrypoint: ["sh", "-c", "cd \"$$0\" && exec npm \"$$@\""]
+    environment:
+      HOME: /tmp
+      NPM_CONFIG_UPDATE_NOTIFIER: "false"
+      # Secret de publication : défini dans .env, jamais dans un fichier commité
+      NPM_AUTH: ${NPM_AUTH:-}
+    volumes:
+      - ./:/work
+    depends_on:
+      nexus:
+        condition: service_healthy
+
+  # ---------------- Tests (profil "test") ----------------
+  unit:
+    build:
+      context: ./frontend
+      target: test
+      extra_hosts:
+        - "nexus:host-gateway"
+    image: tp4/frontend-test:dev
+    profiles: ["test"]
+    command: ["npm", "run", "test:unit"]
+    volumes:
+      - ./frontend:/app
+      # Volume anonyme : garde le node_modules de l'image au lieu de celui (absent) de l'hôte
+      - /app/node_modules
+
+  integration:
+    build:
+      context: ./frontend
+      target: test
+      extra_hosts:
+        - "nexus:host-gateway"
+    image: tp4/frontend-test:dev
+    profiles: ["test"]
+    command: ["npm", "run", "test:integration"]
+    environment:
+      STRAPI_URL: http://strapi:1337
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      strapi:
+        condition: service_healthy
+
+  e2e:
+    build:
+      context: ./frontend
+      target: e2e
+      extra_hosts:
+        - "nexus:host-gateway"
+    image: tp4/frontend-e2e:dev
+    profiles: ["e2e"]
+    command: ["npm", "run", "test:e2e"]
+    environment:
+      BASE_URL: http://frontend:3000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+  # ---------------- Qualité du code (profil "quality") ----------------
+  sonarqube:
+    image: sonarqube:26.9.0.129388-community
+    profiles: ["quality"]
+    environment:
+      # Évite l'arrêt d'Elasticsearch sur les machines où vm.max_map_count est trop bas
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    volumes:
+      - sonar-data:/opt/sonarqube/data
+      - sonar-extensions:/opt/sonarqube/extensions
+      - sonar-logs:/opt/sonarqube/logs
+    ports:
+      - "${SONAR_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  sonar-scanner:
+    image: sonarsource/sonar-scanner-cli:12.2.0.4256_8.1.0
+    profiles: ["quality"]
+    environment:
+      SONAR_HOST_URL: http://sonarqube:9000
+      SONAR_TOKEN: ${SONAR_TOKEN}
+    volumes:
+      - ./frontend:/usr/src
+    depends_on:
+      sonarqube:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  pgadmin-data:
+  strapi-uploads:
+  sonar-data:
+  sonar-extensions:
+  sonar-logs:
+  nexus-data:

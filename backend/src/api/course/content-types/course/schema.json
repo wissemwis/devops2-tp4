@@ -1,0 +1,40 @@
+{
+  "kind": "collectionType",
+  "collectionName": "courses",
+  "info": {
+    "singularName": "course",
+    "pluralName": "courses",
+    "displayName": "Cours",
+    "description": "Séances du module DevOps 2"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "summary": {
+      "type": "text"
+    },
+    "session": {
+      "type": "integer",
+      "required": true,
+      "min": 1
+    },
+    "duration": {
+      "type": "integer",
+      "required": true,
+      "min": 1
+    },
+    "level": {
+      "type": "enumeration",
+      "enum": ["debutant", "intermediaire", "avance"],
+      "required": true
+    },
+    "topics": {
+      "type": "json"
+    }
+  }
+}
